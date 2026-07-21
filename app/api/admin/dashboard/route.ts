@@ -1,31 +1,53 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getHostelDistribution, getMealSummary, getWeeklyConsumption } from '@/lib/server-metrics'
-import { getMealMarkingsForDate, getTodayMealMarkings, readStore } from '@/lib/server-store'
+import { createAdminClient } from '@/lib/supabase'
 
 export async function GET(request: NextRequest) {
   try {
     const dateParam = request.nextUrl.searchParams.get('date')
-    const state = await readStore()
+    const targetDate = dateParam || new Date().toISOString().split('T')[0]
+    const supabase = createAdminClient()
 
-    // Use date param if provided, otherwise default to today
-    const mealMarkings = dateParam
-      ? getMealMarkingsForDate(state, dateParam).sort((a, b) => b.marked_at.localeCompare(a.marked_at))
-      : getTodayMealMarkings(state).sort((a, b) => b.marked_at.localeCompare(a.marked_at))
+    // 1. Fetch Students
+    const { data: students } = await supabase
+      .from('users')
+      .select('*')
+      .eq('role', 'student')
 
-    const allTransactions = Object.values(state.transactionsByStudent).flat()
-    const totalBalance = state.students.reduce((sum, student) => sum + student.balance, 0)
-    const lowBalanceStudents = state.students.filter((student) => student.balance < 2000).length
+    // 2. Fetch Meal Markings for the target date
+    const { data: mealMarkings } = await supabase
+      .from('meal_markings')
+      .select('*, users(name)')
+      .like('marked_at', `${targetDate}%`)
+      .order('marked_at', { ascending: false })
+      
+    // Transform mealMarkings to include student_name
+    const transformedMarkings = (mealMarkings || []).map(m => ({
+      ...m,
+      student_name: m.users?.name || 'Unknown'
+    }))
+
+    // 3. Fetch Transactions (last 7 days is enough for weeklyRevenue, but let's just fetch all or recent)
+    const sevenDaysAgo = new Date()
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
+    const { data: transactions } = await supabase
+      .from('transactions')
+      .select('*')
+      .gte('date', sevenDaysAgo.toISOString().split('T')[0])
+
+    const totalBalance = (students || []).reduce((sum, student) => sum + student.balance, 0)
+    const lowBalanceStudents = (students || []).filter((student) => student.balance < 2000).length
 
     return NextResponse.json({
       success: true,
       data: {
-        students: state.students,
-        mealMarkings,
-        mealSummary: getMealSummary(mealMarkings),
-        hostelData: getHostelDistribution(state),
-        weeklyRevenue: getWeeklyConsumption(allTransactions),
+        students: students || [],
+        mealMarkings: transformedMarkings,
+        mealSummary: getMealSummary(transformedMarkings),
+        hostelData: getHostelDistribution(students || []),
+        weeklyRevenue: getWeeklyConsumption(transactions || []),
         stats: {
-          totalStudents: state.students.length,
+          totalStudents: (students || []).length,
           totalBalance,
           lowBalanceStudents,
         },

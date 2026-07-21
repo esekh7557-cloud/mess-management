@@ -1,22 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server'
-import {
-  addTransaction,
-  readStore,
-  syncStudentBalance,
-  updateStore,
-} from '@/lib/server-store'
+import { createAdminClient } from '@/lib/supabase'
 
 const DEFAULT_BALANCE = 10000
 
 export async function GET() {
-  const state = await readStore()
+  const supabase = createAdminClient()
+
+  const { data: users, error } = await supabase
+    .from('users')
+    .select('*')
+    .eq('role', 'student')
+
+  if (error) {
+    return NextResponse.json({ success: false, error: 'Failed to fetch students' }, { status: 500 })
+  }
+
+  const studentsWithBalance = users.map((student) => ({
+    ...student,
+    balanceDetails: {
+      student_id: student.id,
+      total_balance: DEFAULT_BALANCE,
+      used_balance: DEFAULT_BALANCE - student.balance,
+      remaining_balance: student.balance,
+    }
+  }))
 
   return NextResponse.json({
     success: true,
-    data: state.students.map((student) => ({
-      ...student,
-      balanceDetails: state.balances[student.id],
-    })),
+    data: studentsWithBalance,
   })
 }
 
@@ -28,62 +39,72 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: 'studentId and action are required' }, { status: 400 })
     }
 
-    const result = await updateStore((state) => {
-      const student = state.students.find((item) => item.id === studentId)
-      const balance = state.balances[studentId]
+    const supabase = createAdminClient()
 
-      if (!student || !balance) {
-        return { status: 404 as const, body: { error: 'Student not found' } }
+    // 1. Get current student balance
+    const { data: student, error: studentError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', studentId)
+      .single()
+
+    if (studentError || !student) {
+      return NextResponse.json({ error: 'Student not found' }, { status: 404 })
+    }
+
+    let newBalance = student.balance
+    let transactionAmount = amount
+    let transactionDesc = ''
+
+    if (action === 'recharge') {
+      if (typeof amount !== 'number' || amount <= 0) {
+        return NextResponse.json({ error: 'A positive amount is required for recharge' }, { status: 400 })
       }
+      newBalance += amount
+      transactionDesc = 'Admin Wallet Recharge'
+    } else if (action === 'reset') {
+      newBalance = DEFAULT_BALANCE
+      transactionAmount = DEFAULT_BALANCE
+      transactionDesc = 'Admin Balance Reset'
+    } else {
+      return NextResponse.json({ error: 'Unsupported action' }, { status: 400 })
+    }
 
-      if (action === 'recharge') {
-        if (typeof amount !== 'number' || amount <= 0) {
-          return { status: 400 as const, body: { error: 'A positive amount is required for recharge' } }
-        }
+    // 2. Update balance
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({ balance: newBalance })
+      .eq('id', studentId)
 
-        balance.total_balance += amount
-        balance.remaining_balance += amount
+    if (updateError) throw updateError
 
-        addTransaction(state, studentId, {
-          id: `txn-admin-recharge-${Date.now()}`,
-          date: new Date().toISOString().split('T')[0],
-          description: 'Admin Wallet Recharge',
-          amount,
-          type: 'credit',
-          category: 'recharge',
-        })
-      } else if (action === 'reset') {
-        balance.total_balance = DEFAULT_BALANCE
-        balance.used_balance = 0
-        balance.remaining_balance = DEFAULT_BALANCE
-
-        addTransaction(state, studentId, {
-          id: `txn-admin-reset-${Date.now()}`,
-          date: new Date().toISOString().split('T')[0],
-          description: 'Admin Balance Reset',
-          amount: DEFAULT_BALANCE,
-          type: 'credit',
-          category: 'recharge',
-        })
-      } else {
-        return { status: 400 as const, body: { error: 'Unsupported action' } }
-      }
-
-      syncStudentBalance(state, studentId)
-
-      return {
-        status: 200 as const,
-        body: {
-          success: true,
-          data: state.students.map((item) => ({
-            ...item,
-            balanceDetails: state.balances[item.id],
-          })),
-        },
-      }
+    // 3. Insert transaction
+    await supabase.from('transactions').insert({
+      id: `txn-admin-${action}-${Date.now()}`,
+      student_id: studentId,
+      date: new Date().toISOString().split('T')[0],
+      description: transactionDesc,
+      amount: transactionAmount,
+      type: 'credit',
+      category: 'recharge',
     })
 
-    return NextResponse.json(result.body, { status: result.status })
+    // 4. Return updated students list
+    const { data: allUsers } = await supabase.from('users').select('*').eq('role', 'student')
+    const studentsWithBalance = (allUsers || []).map((stu) => ({
+      ...stu,
+      balanceDetails: {
+        student_id: stu.id,
+        total_balance: DEFAULT_BALANCE,
+        used_balance: DEFAULT_BALANCE - stu.balance,
+        remaining_balance: stu.balance,
+      }
+    }))
+
+    return NextResponse.json({
+      success: true,
+      data: studentsWithBalance,
+    })
   } catch {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
   }

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getAccountByEmail, updateStore, type UserAccount } from '@/lib/server-store'
+import { createAdminClient } from '@/lib/supabase'
 
 export async function POST(request: NextRequest) {
   try {
@@ -29,44 +29,50 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const result = await updateStore((state) => {
-      // Check if user already exists
-      const existingUser = getAccountByEmail(state, email)
-      if (existingUser) {
-        return {
-          status: 400 as const,
-          body: {
-            success: false,
-            error: 'An account with this email already exists',
-          },
-        }
-      }
+    const supabase = createAdminClient()
 
-      const adminCount = state.accounts.filter((a) => a.role === 'admin').length
-      const userId = `ADM${String(adminCount + 1).padStart(3, '0')}`
+    // Check if user already exists
+    const { data: existingUser } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', email)
+      .single()
 
-      const newAccount: UserAccount = {
+    if (existingUser) {
+      return NextResponse.json({
+        success: false,
+        error: 'An account with this email already exists',
+      }, { status: 400 })
+    }
+
+    // Get current admin count to generate ID
+    const { count } = await supabase
+      .from('users')
+      .select('*', { count: 'exact', head: true })
+      .eq('role', 'admin')
+
+    const adminCount = count || 0
+    const userId = `ADM${String(adminCount + 1).padStart(3, '0')}`
+
+    const { error: insertError } = await supabase.from('users').insert({
+      id: userId,
+      name: fullName,
+      email,
+      password,
+      role: 'admin',
+    })
+
+    if (insertError) throw insertError
+
+    return NextResponse.json({
+      success: true,
+      user: {
         id: userId,
         name: fullName,
         email,
-        password,
         role: 'admin',
-      }
-
-      state.accounts.push(newAccount)
-
-      const { password: _, ...userWithoutPassword } = newAccount
-
-      return {
-        status: 200 as const,
-        body: {
-          success: true,
-          user: userWithoutPassword,
-        },
-      }
+      },
     })
-
-    return NextResponse.json(result.body, { status: result.status })
   } catch (error) {
     console.error('Owner signup error:', error)
     return NextResponse.json(

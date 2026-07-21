@@ -1,61 +1,64 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { readStore, updateStore } from '@/lib/server-store'
+import { createAdminClient } from '@/lib/supabase'
+import { defaultMealSelectionTimings } from '@/lib/mock-data'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
-  const state = await readStore()
+  const supabase = createAdminClient()
+  const { data, error } = await supabase
+    .from('app_settings')
+    .select('value')
+    .eq('key', 'meal_timings')
+    .single()
 
-  return NextResponse.json({
-    success: true,
-    data: state.mealTimings,
-  })
+  if (error || !data) {
+    return NextResponse.json({ success: true, data: defaultMealSelectionTimings })
+  }
+
+  return NextResponse.json({ success: true, data: data.value })
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json()
-    const { removeTimeFrame } = body
+    const { removeTimeFrame } = await request.json()
+    const supabase = createAdminClient()
+    
+    const { data: current } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'meal_timings')
+      .single()
 
-    const result = await updateStore((state) => {
-      if (state.mealTimings) {
-        state.mealTimings.removeTimeFrame = removeTimeFrame
-      }
+    const timings = current ? current.value : defaultMealSelectionTimings
+    timings.removeTimeFrame = removeTimeFrame
 
-      return {
-        status: 200 as const,
-        body: {
-          success: true,
-          data: state.mealTimings,
-        },
-      }
-    })
+    const { error: updateError } = await supabase
+      .from('app_settings')
+      .upsert({ key: 'meal_timings', value: timings })
 
-    return NextResponse.json(result.body, { status: result.status })
+    if (updateError) throw updateError
+
+    return NextResponse.json({ success: true, data: timings })
   } catch (error) {
     console.error('Error updating meal timings:', error)
-    return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
+    return NextResponse.json({ error: 'Failed to update timings' }, { status: 400 })
   }
 }
 
 export async function PUT(request: NextRequest) {
   try {
     const timings = await request.json()
+    const supabase = createAdminClient()
 
-    const result = await updateStore((state) => {
-      state.mealTimings = timings
+    const { error } = await supabase
+      .from('app_settings')
+      .upsert({ key: 'meal_timings', value: timings })
 
-      return {
-        status: 200 as const,
-        body: {
-          success: true,
-          data: state.mealTimings,
-        },
-      }
-    })
+    if (error) throw error
 
-    return NextResponse.json(result.body, { status: result.status })
-  } catch {
-    return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
+    return NextResponse.json({ success: true, data: timings })
+  } catch (error) {
+    return NextResponse.json({ error: 'Failed to update timings' }, { status: 400 })
   }
 }

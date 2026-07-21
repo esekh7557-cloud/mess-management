@@ -1,7 +1,7 @@
 import 'server-only'
 
-import type { AppState, MealMarkingRecord } from '@/lib/server-store'
-
+// Remove AppState import since it's no longer used
+// Using any for MealMarkingRecord for simplicity after removing AppState
 // Define Transaction type locally to avoid import issues
 interface Transaction {
   id: string
@@ -14,10 +14,10 @@ interface Transaction {
 
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
-export function getHostelDistribution(state: AppState) {
+export function getHostelDistribution(students: { hostel?: string | null }[]) {
   const counts = new Map<string, number>()
 
-  for (const student of state.students) {
+  for (const student of students) {
     if (!student.hostel) continue
     const hostel = student.hostel.includes(' - ') 
       ? student.hostel.split(' - ')[0] 
@@ -34,7 +34,7 @@ export function getHostelDistribution(state: AppState) {
   }))
 }
 
-export function getMealSummary(markings: MealMarkingRecord[]) {
+export function getMealSummary(markings: any[]) {
   return {
     breakfast: getSingleMealSummary(markings, 'breakfast'),
     lunch: getSingleMealSummary(markings, 'lunch'),
@@ -42,7 +42,7 @@ export function getMealSummary(markings: MealMarkingRecord[]) {
   }
 }
 
-function getSingleMealSummary(markings: MealMarkingRecord[], mealType: MealMarkingRecord['meal_type']) {
+function getSingleMealSummary(markings: any[], mealType: string) {
   const items = markings.filter((marking) => marking.meal_type === mealType)
 
   return {
@@ -95,7 +95,7 @@ export function getWeeklyConsumption(transactions: Transaction[]) {
   return Array.from(totals.values())
 }
 
-export function getSemesterSummary(transactions: Transaction[], mealMarkings: MealMarkingRecord[]) {
+export function getSemesterSummary(transactions: Transaction[], mealMarkings: any[]) {
   const totalDays = 120
   const semesterStart = new Date()
   semesterStart.setDate(semesterStart.getDate() - 45)

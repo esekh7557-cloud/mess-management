@@ -1,10 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import {
-  addTransaction,
-  getStudentById,
-  syncStudentBalance,
-  updateStore,
-} from '@/lib/server-store'
+import { createAdminClient } from '@/lib/supabase'
 
 export async function POST(request: NextRequest) {
   try {
@@ -14,56 +9,81 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'student_id and items are required' }, { status: 400 })
     }
 
-    const result = await updateStore((state) => {
-      const student = getStudentById(state, studentId)
+    const supabase = createAdminClient()
 
-      if (!student) {
-        return { status: 404 as const, body: { error: 'Student not found' } }
-      }
+    // 1. Get student
+    const { data: student, error: studentError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', studentId)
+      .single()
 
-      const lineItems = items.map((item: { id: string; quantity: number }) => {
-        const extra = state.extraItems.find((extraItem) => extraItem.id === item.id)
-        return extra && item.quantity > 0 ? { extra, quantity: item.quantity } : null
-      }).filter(Boolean) as Array<{ extra: (typeof state.extraItems)[number]; quantity: number }>
+    if (studentError || !student) {
+      return NextResponse.json({ error: 'Student not found' }, { status: 404 })
+    }
 
-      if (lineItems.length === 0) {
-        return { status: 400 as const, body: { error: 'No valid items were provided' } }
-      }
+    // 2. Get extra items
+    const { data: extraItems, error: extrasError } = await supabase
+      .from('extra_items')
+      .select('*')
 
-      const total = lineItems.reduce((sum, item) => sum + item.extra.price * item.quantity, 0)
-      const balance = state.balances[studentId]
+    if (extrasError) {
+      return NextResponse.json({ error: 'Failed to fetch extra items' }, { status: 500 })
+    }
 
-      if (balance.remaining_balance < total) {
-        return { status: 400 as const, body: { error: 'Insufficient balance' } }
-      }
+    // 3. Process line items
+    const lineItems = items.map((item: { id: string; quantity: number }) => {
+      const extra = extraItems.find((extraItem) => extraItem.id === item.id)
+      return extra && item.quantity > 0 ? { extra, quantity: item.quantity } : null
+    }).filter(Boolean) as Array<{ extra: any; quantity: number }>
 
-      balance.used_balance += total
-      balance.remaining_balance -= total
-      syncStudentBalance(state, studentId)
+    if (lineItems.length === 0) {
+      return NextResponse.json({ error: 'No valid items were provided' }, { status: 400 })
+    }
 
-      const now = new Date()
-      addTransaction(state, studentId, {
-        id: `txn-extra-${Date.now()}`,
-        date: now.toISOString().split('T')[0],
-        description: `Extras Order - ${lineItems.map((item) => `${item.extra.name} x${item.quantity}`).join(', ')}`,
-        amount: total,
-        type: 'debit',
-        category: 'extra',
-      })
+    const total = lineItems.reduce((sum, item) => sum + Number(item.extra.price) * item.quantity, 0)
+    
+    // 4. Check balance
+    if (student.balance < total) {
+      return NextResponse.json({ error: 'Insufficient balance' }, { status: 400 })
+    }
 
-      return {
-        status: 200 as const,
-        body: {
-          success: true,
-          data: {
-            balance,
-            total,
-          },
-        },
-      }
+    const newBalance = student.balance - total
+
+    // 5. Update balance
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({ balance: newBalance })
+      .eq('id', studentId)
+
+    if (updateError) throw updateError
+
+    // 6. Insert transaction
+    const now = new Date()
+    await supabase.from('transactions').insert({
+      id: `txn-extra-${Date.now()}`,
+      student_id: studentId,
+      date: now.toISOString().split('T')[0],
+      description: `Extras Order - ${lineItems.map((item) => `${item.extra.name} x${item.quantity}`).join(', ')}`,
+      amount: total,
+      type: 'debit',
+      category: 'extra',
     })
 
-    return NextResponse.json(result.body, { status: result.status })
+    const balanceDetails = {
+      student_id: studentId,
+      total_balance: 10000,
+      used_balance: 10000 - newBalance,
+      remaining_balance: newBalance,
+    }
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        balance: balanceDetails,
+        total,
+      },
+    })
   } catch {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
   }

@@ -1,12 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { readStore, updateStore } from '@/lib/server-store'
+import { createAdminClient } from '@/lib/supabase'
 
 export async function GET() {
-  const state = await readStore()
+  const supabase = createAdminClient()
+
+  const { data: notifications, error } = await supabase
+    .from('notifications')
+    .select('*')
+    .order('date', { ascending: false })
+
+  if (error) {
+    return NextResponse.json({ error: 'Failed to fetch notifications' }, { status: 500 })
+  }
 
   return NextResponse.json({
     success: true,
-    data: state.notifications,
+    data: notifications || [],
   })
 }
 
@@ -18,28 +27,34 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'title, message, and type are required' }, { status: 400 })
     }
 
-    const result = await updateStore((state) => {
-      const notification = {
-        id: `notif-${Date.now()}`,
-        title,
-        message,
-        type,
-        date: new Date().toISOString().split('T')[0],
-        read: false,
-      }
+    const supabase = createAdminClient()
 
-      state.notifications.unshift(notification)
+    const newNotification = {
+      id: `notif-${Date.now()}`,
+      title,
+      message,
+      type,
+      date: new Date().toISOString(), // Use full ISO for better sorting
+    }
 
-      return {
-        status: 200 as const,
-        body: {
-          success: true,
-          data: state.notifications,
-        },
-      }
+    const { error: insertError } = await supabase
+      .from('notifications')
+      .insert(newNotification)
+
+    if (insertError) {
+      return NextResponse.json({ error: 'Failed to create notification' }, { status: 500 })
+    }
+
+    // Refetch to return list
+    const { data: notifications } = await supabase
+      .from('notifications')
+      .select('*')
+      .order('date', { ascending: false })
+
+    return NextResponse.json({
+      success: true,
+      data: notifications || [],
     })
-
-    return NextResponse.json(result.body, { status: result.status })
   } catch {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
   }
@@ -52,22 +67,25 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: 'id is required' }, { status: 400 })
   }
 
-  const result = await updateStore((state) => {
-    state.notifications = state.notifications.filter((notification) => notification.id !== id)
+  const supabase = createAdminClient()
 
-    for (const studentState of Object.values(state.notificationStateByStudent)) {
-      studentState.readIds = studentState.readIds.filter((notificationId) => notificationId !== id)
-      studentState.deletedIds = studentState.deletedIds.filter((notificationId) => notificationId !== id)
-    }
+  const { error: deleteError } = await supabase
+    .from('notifications')
+    .delete()
+    .eq('id', id)
 
-    return {
-      status: 200 as const,
-      body: {
-        success: true,
-        data: state.notifications,
-      },
-    }
+  if (deleteError) {
+    return NextResponse.json({ error: 'Failed to delete notification' }, { status: 500 })
+  }
+
+  // Refetch to return list
+  const { data: notifications } = await supabase
+    .from('notifications')
+    .select('*')
+    .order('date', { ascending: false })
+
+  return NextResponse.json({
+    success: true,
+    data: notifications || [],
   })
-
-  return NextResponse.json(result.body, { status: result.status })
 }

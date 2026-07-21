@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { readStore, updateStore } from '@/lib/server-store'
+import { createAdminClient } from '@/lib/supabase'
 
 export async function POST(request: NextRequest) {
   try {
@@ -10,27 +10,28 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'markingId is required' }, { status: 400 })
     }
 
-    const result = await updateStore((state) => {
-      // Find and update the meal marking
-      const marking = state.mealMarkings.find((m: any) => m.id === markingId)
-      if (marking) {
-        marking.completed = true
-      }
+    const supabase = createAdminClient()
 
-      return {
-        status: 200 as const,
-        body: {
-          success: true,
-          data: {
-            marking: marking,
-          },
-        },
-      }
+    const { data: updatedMarking, error } = await supabase
+      .from('meal_markings')
+      .update({ completed: true })
+      .eq('id', markingId)
+      .select()
+      .single()
+
+    if (error) {
+      console.error('Error marking meal as completed:', error)
+      return NextResponse.json({ error: 'Failed to mark meal as completed' }, { status: 500 })
+    }
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        marking: updatedMarking,
+      },
     })
-
-    return NextResponse.json(result.body, { status: result.status })
   } catch (error) {
-    console.error('Error marking meal as completed:', error)
-    return NextResponse.json({ error: 'Failed to mark meal as completed' }, { status: 500 })
+    console.error('Error in request:', error)
+    return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
   }
 }

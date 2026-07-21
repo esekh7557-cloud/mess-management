@@ -1,12 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { readStore, updateStore } from '@/lib/server-store'
+import { createAdminClient } from '@/lib/supabase'
 
 export async function GET() {
-  const state = await readStore()
+  const supabase = createAdminClient()
+  
+  // Define days array to ensure correct sorting later if needed
+  const daysOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+
+  const { data: menu, error } = await supabase.from('weekly_menu').select('*')
+
+  if (error) {
+    return NextResponse.json({ success: false, error: 'Failed to fetch menu' }, { status: 500 })
+  }
+
+  // Sort menu by daysOrder
+  const sortedMenu = menu?.sort((a, b) => daysOrder.indexOf(a.day) - daysOrder.indexOf(b.day)) || []
 
   return NextResponse.json({
     success: true,
-    data: state.weeklyMenu,
+    data: sortedMenu,
   })
 }
 
@@ -18,19 +30,15 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'menu must be an array' }, { status: 400 })
     }
 
-    const result = await updateStore((state) => {
-      state.weeklyMenu = menu
+    const supabase = createAdminClient()
+    const { error } = await supabase.from('weekly_menu').upsert(menu)
 
-      return {
-        status: 200 as const,
-        body: {
-          success: true,
-          data: state.weeklyMenu,
-        },
-      }
+    if (error) throw error
+
+    return NextResponse.json({
+      success: true,
+      data: menu,
     })
-
-    return NextResponse.json(result.body, { status: result.status })
   } catch {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
   }

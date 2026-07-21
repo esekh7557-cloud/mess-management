@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getTodayMealMarkings, updateStore } from '@/lib/server-store'
+import { createAdminClient } from '@/lib/supabase'
 
 export async function PATCH(request: NextRequest) {
   try {
@@ -9,25 +9,29 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: 'mealId and completed are required' }, { status: 400 })
     }
 
-    const result = await updateStore((state) => {
-      const marking = state.mealMarkings.find((item) => item.id === mealId)
+    const supabase = createAdminClient()
 
-      if (!marking) {
-        return { status: 404 as const, body: { error: 'Meal marking not found' } }
-      }
+    const { error: updateError } = await supabase
+      .from('meal_markings')
+      .update({ completed })
+      .eq('id', mealId)
 
-      marking.completed = completed
+    if (updateError) {
+      return NextResponse.json({ error: 'Meal marking not found or update failed' }, { status: 404 })
+    }
 
-      return {
-        status: 200 as const,
-        body: {
-          success: true,
-          data: getTodayMealMarkings(state),
-        },
-      }
+    // Get today's markings to return
+    const today = new Date().toISOString().split('T')[0]
+    const { data: todayMarkings } = await supabase
+      .from('meal_markings')
+      .select('*')
+      .like('marked_at', `${today}%`)
+      .order('marked_at', { ascending: false })
+
+    return NextResponse.json({
+      success: true,
+      data: todayMarkings || [],
     })
-
-    return NextResponse.json(result.body, { status: result.status })
   } catch {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
   }

@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getAccountByEmail, updateStore, type UserAccount } from '@/lib/server-store'
-import type { Student } from '@/lib/mock-data'
+import { createAdminClient } from '@/lib/supabase'
 
 export async function POST(request: NextRequest) {
   try {
@@ -21,79 +20,71 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const result = await updateStore((state) => {
-      // Check if user already exists
-      const existingUser = getAccountByEmail(state, email)
-      if (existingUser) {
-        return {
-          status: 400 as const,
-          body: {
-            success: false,
-            error: 'An account with this email already exists',
-          },
-        }
-      }
+    const supabase = createAdminClient()
 
-      // Generate a structured student/user ID
-      const userId = `STU${String(state.students.length + 1).padStart(3, '0')}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`
-      const initialBalance = 5000 // Default signup bonus balance
+    // Check if user already exists
+    const { data: existingUser } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', email)
+      .single()
 
-      const newAccount: UserAccount = {
+    if (existingUser) {
+      return NextResponse.json({
+        success: false,
+        error: 'An account with this email already exists',
+      }, { status: 400 })
+    }
+
+    // Get current student count to generate ID
+    const { count } = await supabase
+      .from('users')
+      .select('*', { count: 'exact', head: true })
+      .eq('role', 'student')
+
+    const studentCount = count || 0
+    const userId = `STU${String(studentCount + 1).padStart(3, '0')}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`
+    const initialBalance = 5000 // Default signup bonus balance
+
+    // Insert user
+    const { error: insertError } = await supabase.from('users').insert({
+      id: userId,
+      name,
+      email,
+      password,
+      role: 'student',
+      hostel,
+      room,
+      semester: Number(semester),
+      balance: initialBalance,
+    })
+
+    if (insertError) throw insertError
+
+    // Insert initial transaction
+    await supabase.from('transactions').insert({
+      id: `tx-init-${Date.now()}`,
+      student_id: userId,
+      date: new Date().toISOString().split('T')[0],
+      description: 'Opening Wallet Balance',
+      amount: initialBalance,
+      type: 'credit',
+      category: 'recharge',
+    })
+
+    return NextResponse.json({
+      success: true,
+      user: {
         id: userId,
         name,
         email,
-        password,
         role: 'student',
         hostel,
         room,
         semester: Number(semester),
         balance: initialBalance,
-      }
-
-      const newStudent: Student = {
-        id: userId,
-        name,
-        email,
-        hostel,
-        room,
-        semester: Number(semester),
-        balance: initialBalance,
-      }
-
-      state.accounts.push(newAccount)
-      state.students.push(newStudent)
-      state.balances[userId] = {
-        student_id: userId,
-        total_balance: 10000,
-        used_balance: 10000 - initialBalance,
-        remaining_balance: initialBalance,
-      }
-
-      state.transactionsByStudent[userId] = [
-        {
-          id: `tx-init-${Date.now()}`,
-          date: new Date().toISOString().split('T')[0],
-          description: 'Opening Wallet Balance',
-          amount: 10000,
-          type: 'credit',
-          category: 'recharge',
-        },
-      ]
-
-      state.notificationStateByStudent[userId] = { readIds: [], deletedIds: [] }
-
-      const { password: _, ...userWithoutPassword } = newAccount
-
-      return {
-        status: 200 as const,
-        body: {
-          success: true,
-          user: userWithoutPassword,
-        },
-      }
+      },
     })
-
-    return NextResponse.json(result.body, { status: result.status })
   } catch (error) {
     console.error('Signup error:', error)
     return NextResponse.json(

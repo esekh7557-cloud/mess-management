@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getAccountByEmail, updateStore, type UserAccount } from '@/lib/server-store'
-import type { Student } from '@/lib/mock-data'
+import { createAdminClient } from '@/lib/supabase'
 
 interface CreateAccountRequest {
   name: string
@@ -34,83 +33,61 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const result = await updateStore((state) => {
-      // Check if user already exists
-      const existingUser = getAccountByEmail(state, body.email)
-      if (existingUser) {
-        return {
-          status: 400 as const,
-          body: {
-            success: false,
-            error: 'User with this email already exists',
-          },
-        }
-      }
+    const supabase = createAdminClient()
 
-      const userId = `user_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`
-      const initialBalance = body.balance ?? 5000
+    // Check if user already exists
+    const { data: existingUser } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', body.email)
+      .single()
 
-      const newAccount: UserAccount = {
+    if (existingUser) {
+      return NextResponse.json({
+        success: false,
+        error: 'User with this email already exists',
+      }, { status: 400 })
+    }
+
+    const userId = `user_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`
+    const initialBalance = body.balance ?? 5000
+
+    const { error: insertError } = await supabase.from('users').insert({
+      id: userId,
+      name: body.name,
+      email: body.email,
+      password: body.password,
+      role: body.role,
+      hostel: body.hostel || '',
+      room: body.room || '',
+      semester: body.semester || 1,
+      balance: body.role === 'student' ? initialBalance : 0,
+    })
+
+    if (insertError) throw insertError
+
+    if (body.role === 'student') {
+      await supabase.from('transactions').insert({
+        id: `seed-recharge-${userId}`,
+        student_id: userId,
+        date: new Date().toISOString().split('T')[0],
+        description: 'Opening Wallet Balance',
+        amount: initialBalance,
+        type: 'credit',
+        category: 'recharge',
+      })
+    }
+
+    return NextResponse.json({
+      success: true,
+      data: {
         id: userId,
         name: body.name,
         email: body.email,
-        password: body.password,
         role: body.role,
-        hostel: body.hostel || '',
-        room: body.room || '',
-        semester: body.semester || 1,
-        balance: body.role === 'student' ? initialBalance : undefined,
-      }
-
-      state.accounts.push(newAccount)
-
-      if (body.role === 'student') {
-        const newStudent: Student = {
-          id: userId,
-          name: body.name,
-          email: body.email,
-          hostel: body.hostel || '',
-          room: body.room || '',
-          semester: body.semester || 1,
-          balance: initialBalance,
-        }
-
-        state.students.push(newStudent)
-        state.balances[userId] = {
-          student_id: userId,
-          total_balance: 10000,
-          used_balance: 10000 - initialBalance,
-          remaining_balance: initialBalance,
-        }
-        state.transactionsByStudent[userId] = [
-          {
-            id: `seed-recharge-${userId}`,
-            date: new Date().toISOString().split('T')[0],
-            description: 'Opening Wallet Balance',
-            amount: 10000,
-            type: 'credit',
-            category: 'recharge',
-          },
-        ]
-        state.notificationStateByStudent[userId] = { readIds: [], deletedIds: [] }
-      }
-
-      return {
-        status: 201 as const,
-        body: {
-          success: true,
-          data: {
-            id: newAccount.id,
-            name: newAccount.name,
-            email: newAccount.email,
-            role: newAccount.role,
-            message: `Account created successfully for ${body.name}`,
-          },
-        },
-      }
-    })
-
-    return NextResponse.json(result.body, { status: result.status })
+        message: `Account created successfully for ${body.name}`,
+      },
+    }, { status: 201 })
   } catch (error) {
     console.error('Error creating account:', error)
     return NextResponse.json(

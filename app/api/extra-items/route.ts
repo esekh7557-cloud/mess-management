@@ -1,12 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { readStore, updateStore } from '@/lib/server-store'
+import { createAdminClient } from '@/lib/supabase'
 
 export async function GET() {
-  const state = await readStore()
+  const supabase = createAdminClient()
+
+  const { data: extraItems, error } = await supabase
+    .from('extra_items')
+    .select('*')
+
+  if (error) {
+    return NextResponse.json({ error: 'Failed to fetch extra items' }, { status: 500 })
+  }
 
   return NextResponse.json({
     success: true,
-    data: state.extraItems,
+    data: extraItems || [],
   })
 }
 
@@ -18,19 +26,26 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'items must be an array' }, { status: 400 })
     }
 
-    const result = await updateStore((state) => {
-      state.extraItems = items
+    const supabase = createAdminClient()
 
-      return {
-        status: 200 as const,
-        body: {
-          success: true,
-          data: state.extraItems,
-        },
+    // Since we are replacing all extra items, first delete existing ones
+    // We use .not('id', 'is', null) to match all rows
+    await supabase.from('extra_items').delete().not('id', 'is', null)
+
+    if (items.length > 0) {
+      const { error: insertError } = await supabase
+        .from('extra_items')
+        .insert(items)
+
+      if (insertError) {
+        return NextResponse.json({ error: 'Failed to save extra items' }, { status: 500 })
       }
-    })
+    }
 
-    return NextResponse.json(result.body, { status: result.status })
+    return NextResponse.json({
+      success: true,
+      data: items,
+    })
   } catch {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
   }

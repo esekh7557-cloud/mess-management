@@ -1,19 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getMealCost, getMealTargetDate, validateMealMarking } from '@/lib/meal-marking'
 import {
-  addTransaction,
-  getStudentById,
-  getStudentTransactions,
-  getMealMarkingsForDate,
-  getTodayMealMarkings,
   getLowBalanceNotification,
-  readStore,
   shouldCreateLowBalanceAlert,
-  syncStudentBalance,
-  updateStore,
   type MealCategory,
   type MealType,
 } from '@/lib/server-store'
+import { createAdminClient } from '@/lib/supabase'
 
 export async function GET(request: NextRequest) {
   const studentId = request.nextUrl.searchParams.get('student_id')
@@ -22,16 +15,45 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'student_id is required' }, { status: 400 })
   }
 
-  const state = await readStore()
-  const student = getStudentById(state, studentId)
+  const supabase = createAdminClient()
 
-  if (!student) {
+  // 1. Get user & balance
+  const { data: user, error: userError } = await supabase
+    .from('users')
+    .select('*')
+    .eq('id', studentId)
+    .single()
+
+  if (userError || !user) {
     return NextResponse.json({ error: 'Student not found' }, { status: 404 })
   }
 
+  // 2. Get meal timings
+  const { data: timingsData } = await supabase
+    .from('app_settings')
+    .select('value')
+    .eq('key', 'meal_timings')
+    .single()
+  
+  const mealTimings = timingsData?.value
+
+  // 3. Get transactions
+  const { data: transactions } = await supabase
+    .from('transactions')
+    .select('*')
+    .eq('student_id', studentId)
+    .order('date', { ascending: false })
+    .limit(5)
+
+  // 4. Get markings
+  const { data: markings } = await supabase
+    .from('meal_markings')
+    .select('*')
+    .eq('student_id', studentId)
+
   const mealTypes: MealType[] = ['breakfast', 'lunch', 'dinner']
   const mealTargets = mealTypes.reduce<Record<MealType, { date: string; isTomorrow: boolean }>>((acc, meal) => {
-    acc[meal] = getMealTargetDate(meal, state.mealTimings)
+    acc[meal] = getMealTargetDate(meal, mealTimings)
     return acc
   }, {} as Record<MealType, { date: string; isTomorrow: boolean }>)
 
@@ -39,25 +61,35 @@ export async function GET(request: NextRequest) {
   const markedMeals: MealType[] = []
   for (const meal of mealTypes) {
     const { date } = mealTargets[meal]
-    const markings = getMealMarkingsForDate(state, date).filter(
-      (m) => m.student_id === studentId && m.meal_type === meal
+    const hasMarking = markings?.some(
+      (m) => m.meal_type === meal && m.marked_at.startsWith(date)
     )
-    if (markings.length > 0) {
+    if (hasMarking) {
       markedMeals.push(meal)
     }
   }
 
-  const todayMarkings = getTodayMealMarkings(state).filter((marking) => marking.student_id === studentId)
+  const today = new Date().toISOString().split('T')[0]
+  const todayMarkings = markings?.filter((m) => m.marked_at.startsWith(today)) || []
+
+  // Create balance object shaped like old StudentBalance
+  const remaining_balance = user.balance
+  const balance = {
+    student_id: user.id,
+    total_balance: 10000,
+    used_balance: 10000 - remaining_balance,
+    remaining_balance
+  }
 
   return NextResponse.json({
     success: true,
     data: {
-      balance: state.balances[studentId],
-      timings: state.mealTimings,
+      balance,
+      timings: mealTimings,
       markedMeals,
       mealTargets,
       todayMarkings,
-      recentTransactions: getStudentTransactions(state, studentId).slice(0, 5),
+      recentTransactions: transactions || [],
     },
   })
 }
@@ -75,118 +107,143 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'student_id and mealType are required' }, { status: 400 })
     }
 
-    const result = await updateStore((state) => {
-      const student = getStudentById(state, studentId)
+    const supabase = createAdminClient()
 
-      if (!student) {
-        return { status: 404 as const, body: { error: 'Student not found' } }
-      }
+    // Get student
+    const { data: student, error: userError } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', studentId)
+      .single()
 
-      const selectedCategory = category ?? 'veg'
-      const balance = state.balances[studentId]
+    if (userError || !student) {
+      return NextResponse.json({ error: 'Student not found' }, { status: 404 })
+    }
 
-      // Determine target date and whether it's tomorrow
-      const mealTarget = getMealTargetDate(mealType, state.mealTimings)
-      const effectiveDate = targetDate ?? mealTarget.date
-      const isTomorrow = effectiveDate !== new Date().toISOString().split('T')[0]
+    // Get timings
+    const { data: timingsData } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'meal_timings')
+      .single()
+    const mealTimings = timingsData?.value
 
-      // Check duplicates against the target date, not just today
-      const dateMarkings = getMealMarkingsForDate(state, effectiveDate).filter(
-        (marking) => marking.student_id === studentId
+    const selectedCategory = category ?? 'veg'
+    const remainingBalance = student.balance
+
+    // Determine target date and whether it's tomorrow
+    const mealTarget = getMealTargetDate(mealType, mealTimings)
+    const effectiveDate = targetDate ?? mealTarget.date
+    const isTomorrow = effectiveDate !== new Date().toISOString().split('T')[0]
+
+    // Check duplicates
+    const { data: existingMarkings } = await supabase
+      .from('meal_markings')
+      .select('*')
+      .eq('student_id', studentId)
+      .eq('meal_type', mealType)
+      .like('marked_at', `${effectiveDate}%`)
+
+    if (existingMarkings && existingMarkings.length > 0) {
+      return NextResponse.json({ error: `You have already marked ${mealType} for ${isTomorrow ? 'tomorrow' : 'today'}` }, { status: 400 })
+    }
+
+    // Skip time validation for tomorrow's meals
+    if (!isTomorrow) {
+      const validation = validateMealMarking(
+        mealType,
+        remainingBalance,
+        false,
+        selectedCategory,
+        mealTimings
       )
-      const alreadyMarked = dateMarkings.some((marking) => marking.meal_type === mealType)
 
-      if (alreadyMarked) {
-        return {
-          status: 400 as const,
-          body: { error: `You have already marked ${mealType} for ${isTomorrow ? 'tomorrow' : 'today'}` },
-        }
+      if (!validation.valid) {
+        return NextResponse.json({ error: validation.error ?? 'Unable to mark meal' }, { status: 400 })
       }
+    }
 
-      // Skip time validation for tomorrow's meals
-      if (!isTomorrow) {
-        const validation = validateMealMarking(
-          mealType,
-          balance.remaining_balance,
-          false,
-          selectedCategory,
-          state.mealTimings
-        )
+    // Balance check
+    const mealPrice = getMealCost(mealType, selectedCategory)
+    if (remainingBalance < mealPrice) {
+      return NextResponse.json({ error: `Insufficient balance. Required: Rs. ${mealPrice}, Available: Rs. ${remainingBalance}` }, { status: 400 })
+    }
 
-        if (!validation.valid) {
-          return { status: 400 as const, body: { error: validation.error ?? 'Unable to mark meal' } }
-        }
-      }
+    const now = new Date()
+    const markedAtDate = isTomorrow ? `${effectiveDate}T${now.toISOString().split('T')[1]}` : now.toISOString()
+    const markingId = `MRK-${Date.now()}`
+    
+    // Update balance
+    const newBalance = remainingBalance - mealPrice
+    await supabase.from('users').update({ balance: newBalance }).eq('id', studentId)
 
-      // Balance check (needed for both today and tomorrow)
-      const mealPrice = getMealCost(mealType, selectedCategory)
-      if (balance.remaining_balance < mealPrice) {
-        return {
-          status: 400 as const,
-          body: { error: `Insufficient balance. Required: Rs. ${mealPrice}, Available: Rs. ${balance.remaining_balance}` },
-        }
-      }
+    // Insert marking
+    const marking = {
+      id: markingId,
+      student_id: studentId,
+      meal_type: mealType,
+      meal_category: selectedCategory,
+      meal_price: mealPrice,
+      marked_at: markedAtDate,
+      completed: false,
+    }
+    await supabase.from('meal_markings').insert(marking)
 
-      // Create the marking with the target date's timestamp
-      const now = new Date()
-      const markedAtDate = isTomorrow ? `${effectiveDate}T${now.toISOString().split('T')[1]}` : now.toISOString()
-      const marking = {
-        id: `MRK-${Date.now()}`,
-        student_id: studentId,
-        student_name: student.name,
-        meal_type: mealType,
-        meal_category: selectedCategory,
-        meal_price: mealPrice,
-        marked_at: markedAtDate,
-        completed: false,
-      }
-
-      state.mealMarkings.unshift(marking)
-      balance.used_balance += mealPrice
-      balance.remaining_balance -= mealPrice
-      syncStudentBalance(state, studentId)
-
-      addTransaction(state, studentId, {
-        id: `txn-meal-${Date.now()}`,
-        date: effectiveDate,
-        description: `${mealType.charAt(0).toUpperCase() + mealType.slice(1)} - ${selectedCategory === 'veg' ? 'Veg' : 'Non-Veg'}${isTomorrow ? ' (Tomorrow)' : ''}`,
-        amount: mealPrice,
-        type: 'debit',
-        category: 'meal',
-      })
-
-      if (shouldCreateLowBalanceAlert(balance.remaining_balance)) {
-        state.notifications.unshift(getLowBalanceNotification(student.name, balance.remaining_balance))
-      }
-
-      // Return marked meals for each meal's target date
-      const mealTypes: MealType[] = ['breakfast', 'lunch', 'dinner']
-      const updatedMarkedMeals: MealType[] = []
-      for (const mt of mealTypes) {
-        const target = getMealTargetDate(mt, state.mealTimings)
-        const markings = getMealMarkingsForDate(state, target.date).filter(
-          (m) => m.student_id === studentId && m.meal_type === mt
-        )
-        if (markings.length > 0) {
-          updatedMarkedMeals.push(mt)
-        }
-      }
-
-      return {
-        status: 200 as const,
-        body: {
-          success: true,
-          data: {
-            marking,
-            balance,
-            markedMeals: updatedMarkedMeals,
-          },
-        },
-      }
+    // Insert transaction
+    await supabase.from('transactions').insert({
+      id: `txn-meal-${Date.now()}`,
+      student_id: studentId,
+      date: effectiveDate,
+      description: `${mealType.charAt(0).toUpperCase() + mealType.slice(1)} - ${selectedCategory === 'veg' ? 'Veg' : 'Non-Veg'}${isTomorrow ? ' (Tomorrow)' : ''}`,
+      amount: mealPrice,
+      type: 'debit',
+      category: 'meal',
     })
 
-    return NextResponse.json(result.body, { status: result.status })
-  } catch {
-    return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
+    // Insert notification if low balance
+    if (shouldCreateLowBalanceAlert(newBalance)) {
+      const notif = getLowBalanceNotification(student.name, newBalance)
+      await supabase.from('notifications').insert({
+        id: notif.id,
+        title: notif.title,
+        message: notif.message,
+        date: notif.date,
+        type: notif.type
+      })
+      await supabase.from('student_notifications').insert({
+        student_id: studentId,
+        notification_id: notif.id,
+        is_read: false,
+        is_deleted: false
+      })
+    }
+
+    // Refetch marked meals
+    const mealTypes: MealType[] = ['breakfast', 'lunch', 'dinner']
+    const updatedMarkedMeals: MealType[] = []
+    
+    const { data: allMarkings } = await supabase.from('meal_markings').select('*').eq('student_id', studentId)
+    for (const mt of mealTypes) {
+      const target = getMealTargetDate(mt, mealTimings)
+      if (allMarkings?.some(m => m.meal_type === mt && m.marked_at.startsWith(target.date))) {
+        updatedMarkedMeals.push(mt)
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        marking: { ...marking, student_name: student.name },
+        balance: {
+          student_id: studentId,
+          total_balance: 10000,
+          used_balance: 10000 - newBalance,
+          remaining_balance: newBalance
+        },
+        markedMeals: updatedMarkedMeals,
+      },
+    })
+  } catch (error) {
+    return NextResponse.json({ error: 'Failed to process meal' }, { status: 400 })
   }
 }
