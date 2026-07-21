@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { readStore, getAccountByIdentifier } from '@/lib/server-store'
+import { createAdminClient } from '@/lib/supabase'
 
 export async function POST(request: NextRequest) {
   try {
@@ -11,10 +11,14 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const state = await readStore()
-    const account = getAccountByIdentifier(state, email)
+    const supabase = createAdminClient()
+    const { data: account, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', email)
+      .single()
 
-    if (!account) {
+    if (error || !account) {
       return NextResponse.json(
         { error: 'Invalid email or password' },
         { status: 401 }

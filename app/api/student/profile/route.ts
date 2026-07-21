@@ -1,11 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSemesterSummary, getWeeklyConsumption } from '@/lib/server-metrics'
-import {
-  getStudentById,
-  getStudentTransactions,
-  getTodayMealMarkings,
-  readStore,
-} from '@/lib/server-store'
+import { createAdminClient } from '@/lib/supabase'
 
 export async function GET(request: NextRequest) {
   const studentId = request.nextUrl.searchParams.get('student_id')
@@ -14,28 +9,52 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'student_id is required' }, { status: 400 })
   }
 
-  const state = await readStore()
-  const student = getStudentById(state, studentId)
+  const supabase = createAdminClient()
 
-  if (!student) {
+  const { data: student, error: studentError } = await supabase
+    .from('users')
+    .select('*')
+    .eq('id', studentId)
+    .single()
+
+  if (studentError || !student) {
     return NextResponse.json({ error: 'Student not found' }, { status: 404 })
   }
 
-  const transactions = getStudentTransactions(state, studentId)
-  const studentMealMarkings = state.mealMarkings.filter((marking) => marking.student_id === studentId)
-  const todayMeals = getTodayMealMarkings(state)
-    .filter((marking) => marking.student_id === studentId)
-    .map((marking) => marking.meal_type)
+  const { data: transactions } = await supabase
+    .from('transactions')
+    .select('*')
+    .eq('student_id', studentId)
+    .order('date', { ascending: false })
+
+  const { data: mealMarkings } = await supabase
+    .from('meal_markings')
+    .select('*')
+    .eq('student_id', studentId)
+    .order('marked_at', { ascending: false })
+
+  const today = new Date().toISOString().split('T')[0]
+  const todayMeals = (mealMarkings || [])
+    .filter((m) => m.marked_at.startsWith(today))
+    .map((m) => m.meal_type)
+
+  const DEFAULT_BALANCE = 10000
+  const balance = {
+    student_id: studentId,
+    total_balance: DEFAULT_BALANCE,
+    used_balance: DEFAULT_BALANCE - student.balance,
+    remaining_balance: student.balance,
+  }
 
   return NextResponse.json({
     success: true,
     data: {
       student,
-      balance: state.balances[studentId],
-      transactions,
-      recentTransactions: transactions.slice(0, 5),
-      weeklyConsumption: getWeeklyConsumption(transactions),
-      semesterSummary: getSemesterSummary(transactions, studentMealMarkings),
+      balance,
+      transactions: transactions || [],
+      recentTransactions: (transactions || []).slice(0, 5),
+      weeklyConsumption: getWeeklyConsumption(transactions || []),
+      semesterSummary: getSemesterSummary(transactions || [], mealMarkings || []),
       todayMeals,
     },
   })
