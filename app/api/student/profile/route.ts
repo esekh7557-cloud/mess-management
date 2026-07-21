@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSemesterSummary, getWeeklyConsumption } from '@/lib/server-metrics'
-import { getCurrentIST } from '@/lib/meal-marking'
+import { getCurrentIST, getISTDateString } from '@/lib/meal-marking'
 import { createAdminClient } from '@/lib/supabase'
 
 export async function GET(request: NextRequest) {
@@ -36,7 +36,7 @@ export async function GET(request: NextRequest) {
 
   const { isoDate: today } = getCurrentIST()
   const todayMeals = (mealMarkings || [])
-    .filter((m) => m.marked_at.startsWith(today))
+    .filter((m) => getISTDateString(m.marked_at) === today)
     .map((m) => m.meal_type)
 
   const DEFAULT_BALANCE = 10000

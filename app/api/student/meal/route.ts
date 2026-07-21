@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getMealCost, getMealTargetDate, validateMealMarking, getCurrentIST } from '@/lib/meal-marking'
+import { getMealCost, getMealTargetDate, validateMealMarking, getCurrentIST, getISTDateString } from '@/lib/meal-marking'
 import {
   type MealCategory,
   type MealType,
@@ -62,7 +62,7 @@ export async function GET(request: NextRequest) {
   for (const meal of mealTypes) {
     const { date } = mealTargets[meal]
     const hasMarking = markings?.some(
-      (m) => m.meal_type === meal && m.marked_at.startsWith(date)
+      (m) => m.meal_type === meal && getISTDateString(m.marked_at) === date
     )
     if (hasMarking) {
       markedMeals.push(meal)
@@ -70,7 +70,7 @@ export async function GET(request: NextRequest) {
   }
 
   const { isoDate: today } = getCurrentIST()
-  const todayMarkings = markings?.filter((m) => m.marked_at.startsWith(today)) || []
+  const todayMarkings = markings?.filter((m) => getISTDateString(m.marked_at) === today) || []
 
   // Create balance object shaped like old StudentBalance
   const remaining_balance = user.balance
@@ -227,7 +227,7 @@ export async function POST(request: NextRequest) {
     const { data: allMarkings } = await supabase.from('meal_markings').select('*').eq('student_id', studentId)
     for (const mt of mealTypes) {
       const target = getMealTargetDate(mt, mealTimings)
-      if (allMarkings?.some(m => m.meal_type === mt && m.marked_at.startsWith(target.date))) {
+      if (allMarkings?.some(m => m.meal_type === mt && getISTDateString(m.marked_at) === target.date)) {
         updatedMarkedMeals.push(mt)
       }
     }

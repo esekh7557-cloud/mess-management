@@ -80,6 +80,13 @@ export function getCurrentIST() {
 }
 
 /**
+ * Parses a UTC timestamp and returns the date string (YYYY-MM-DD) in IST
+ */
+export function getISTDateString(timestamp: string): string {
+  return new Date(timestamp).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+/**
  * Check if a meal can be marked right now
  */
 export function canMarkMeal(
