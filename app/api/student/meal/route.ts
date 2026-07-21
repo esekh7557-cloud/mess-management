@@ -143,7 +143,8 @@ export async function POST(request: NextRequest) {
       .select('*')
       .eq('student_id', studentId)
       .eq('meal_type', mealType)
-      .like('marked_at', `${effectiveDate}%`)
+      .gte('marked_at', `${effectiveDate}T00:00:00.000Z`)
+      .lte('marked_at', `${effectiveDate}T23:59:59.999Z`)
 
     if (existingMarkings && existingMarkings.length > 0) {
       return NextResponse.json({ error: `You have already marked ${mealType} for ${isTomorrow ? 'tomorrow' : 'today'}` }, { status: 400 })

@@ -81,10 +81,14 @@ const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8']
 function getTomorrowDateString() {
   const tomorrow = new Date()
   tomorrow.setDate(tomorrow.getDate() + 1)
-  return tomorrow.toISOString().split('T')[0]
+  const year = tomorrow.getFullYear()
+  const month = String(tomorrow.getMonth() + 1).padStart(2, '0')
+  const day = String(tomorrow.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function formatDateLabel(date: string) {
+  // Parse as local timezone by appending T00:00:00 but removing Z
   return new Date(date + 'T00:00:00').toLocaleDateString('en-IN', {
     weekday: 'short',
     day: 'numeric',

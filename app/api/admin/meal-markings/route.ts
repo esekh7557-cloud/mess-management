@@ -27,7 +27,8 @@ export async function PATCH(request: NextRequest) {
     const { data: todayMarkings } = await supabase
       .from('meal_markings')
       .select('*')
-      .like('marked_at', `${today}%`)
+      .gte('marked_at', `${today}T00:00:00.000Z`)
+      .lte('marked_at', `${today}T23:59:59.999Z`)
       .order('marked_at', { ascending: false })
 
     return NextResponse.json({

@@ -20,7 +20,8 @@ export async function GET(request: NextRequest) {
     const { data: mealMarkings } = await supabase
       .from('meal_markings')
       .select('*, users(name)')
-      .like('marked_at', `${targetDate}%`)
+      .gte('marked_at', `${targetDate}T00:00:00.000Z`)
+      .lte('marked_at', `${targetDate}T23:59:59.999Z`)
       .order('marked_at', { ascending: false })
       
     // Transform mealMarkings to include student_name
