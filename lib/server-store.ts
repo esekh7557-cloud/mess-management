@@ -197,118 +197,64 @@ function seedState(): AppState {
   }
 }
 
-async function ensureStoreFile() {
-  await mkdir(DATA_DIR, { recursive: true })
+import { createAdminClient } from './supabase'
 
-  try {
-    const raw = await readFile(STORE_PATH, 'utf-8')
-    const normalized = normalizeStore(JSON.parse(raw) as AppState)
-    const normalizedRaw = JSON.stringify(normalized, null, 2)
+const supabase = createAdminClient()
 
-    if (raw !== normalizedRaw) {
-      await writeFile(STORE_PATH, normalizedRaw, 'utf-8')
+async function fetchStoreFromSupabase(): Promise<AppState> {
+  const [
+    { data: users },
+    { data: markings },
+    { data: transactions },
+    { data: notifications },
+    { data: extra },
+    { data: menu },
+    { data: settings }
+  ] = await Promise.all([
+    supabase.from('users').select('*'),
+    supabase.from('meal_markings').select('*').order('marked_at', { ascending: false }),
+    supabase.from('transactions').select('*').order('date', { ascending: false }),
+    supabase.from('notifications').select('*').order('date', { ascending: false }),
+    supabase.from('extra_items').select('*'),
+    supabase.from('weekly_menu').select('*'),
+    supabase.from('app_settings').select('*')
+  ])
+
+  const state: AppState = {
+    accounts: users || [],
+    students: (users || []).filter(u => u.role === 'student') as Student[],
+    balances: {},
+    transactionsByStudent: {},
+    notifications: notifications || [],
+    notificationStateByStudent: {},
+    mealMarkings: markings || [],
+    mealTimings: settings?.find(s => s.key === 'meal_timings')?.value || defaultMealSelectionTimings,
+    weeklyMenu: menu || weeklyMenu,
+    extraItems: extra || extraItems
+  }
+
+  // Populate balances and transactions map
+  state.students.forEach(student => {
+    state.balances[student.id] = {
+      student_id: student.id,
+      total_balance: DEFAULT_WALLET_BALANCE,
+      used_balance: DEFAULT_WALLET_BALANCE - (student.balance || 0),
+      remaining_balance: student.balance || 0
     }
-  } catch {
-    const initialState = seedState()
-    await writeFile(STORE_PATH, JSON.stringify(initialState, null, 2), 'utf-8')
-  }
-}
+    state.transactionsByStudent[student.id] = []
+  })
 
-function normalizeStore(state: AppState): AppState {
-  const balances = { ...(state.balances ?? createInitialBalances()) }
-  const students = [...(state.students ?? [])]
-
-  for (const student of seededStudents) {
-    if (!balances[student.id]) {
-      balances[student.id] = createInitialBalance(student)
+  transactions?.forEach(tx => {
+    if (!state.transactionsByStudent[tx.student_id]) {
+      state.transactionsByStudent[tx.student_id] = []
     }
+    state.transactionsByStudent[tx.student_id].push(tx)
+  })
 
-    if (!students.some((item) => item.id === student.id)) {
-      students.push({
-        ...student,
-        balance: balances[student.id]?.remaining_balance ?? student.balance,
-      })
-    }
-  }
-
-  const normalizedStudents = students.map((student) => ({
-    ...student,
-    balance: balances[student.id]?.remaining_balance ?? student.balance,
-  }))
-
-  const transactionsByStudent = {
-    ...(state.transactionsByStudent ?? createInitialTransactions()),
-  }
-
-  for (const student of seededStudents) {
-    if (!transactionsByStudent[student.id]) {
-      transactionsByStudent[student.id] = createInitialTransactionsForStudent(student)
-    }
-  }
-
-  const notificationStateByStudent = {
-    ...(state.notificationStateByStudent ?? createInitialNotificationState()),
-  }
-
-  for (const student of seededStudents) {
-    if (!notificationStateByStudent[student.id]) {
-      notificationStateByStudent[student.id] = { readIds: [], deletedIds: [] }
-    }
-  }
-
-  const accounts = [...(state.accounts ?? createInitialAccounts(balances))]
-
-  for (const student of normalizedStudents) {
-    if (!accounts.some((account) => account.id === student.id)) {
-      accounts.push({
-        id: student.id,
-        name: student.name,
-        email: student.email,
-        password: DEFAULT_STUDENT_PASSWORD,
-        role: 'student',
-        hostel: student.hostel,
-        room: student.room,
-        semester: student.semester,
-        balance: balances[student.id]?.remaining_balance ?? student.balance,
-      })
-    }
-  }
-
-  if (!accounts.some((account) => account.role === 'admin')) {
-    accounts.push(DEFAULT_ADMIN_ACCOUNT)
-  }
-
-  const nextState: AppState = {
-    accounts,
-    students: normalizedStudents,
-    balances,
-    transactionsByStudent,
-    notifications: state.notifications ?? seededNotifications,
-    notificationStateByStudent,
-    mealMarkings: state.mealMarkings ?? [],
-    mealTimings: state.mealTimings ?? defaultMealSelectionTimings,
-    weeklyMenu: state.weeklyMenu ?? weeklyMenu,
-    extraItems: state.extraItems ?? extraItems,
-  }
-
-  return nextState
+  return state
 }
 
 export async function readStore(): Promise<AppState> {
-  await ensureStoreFile()
-  const raw = await readFile(STORE_PATH, 'utf-8')
-  return normalizeStore(JSON.parse(raw) as AppState)
-}
-
-async function writeStore(nextState: AppState) {
-  await writeFile(STORE_PATH, JSON.stringify(nextState, null, 2), 'utf-8')
-}
-
-export async function updateStore<T>(updater: (state: AppState) => T | Promise<T>) {
-  let result!: T
-
-  writeQueue = writeQueue.then(async () => {
-    const state = await readStore()
     result = await updater(state)
     await writeStore(state)
   })
