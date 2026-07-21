@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getHostelDistribution, getMealSummary, getWeeklyConsumption } from '@/lib/server-metrics'
+import { getCurrentIST } from '@/lib/meal-marking'
 import { createAdminClient } from '@/lib/supabase'
 
 export async function GET(request: NextRequest) {
   try {
     const dateParam = request.nextUrl.searchParams.get('date')
-    const targetDate = dateParam || new Date().toISOString().split('T')[0]
+    const { isoDate } = getCurrentIST()
+    const targetDate = dateParam || isoDate
     const supabase = createAdminClient()
 
     // 1. Fetch Students

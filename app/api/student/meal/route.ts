@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getMealCost, getMealTargetDate, validateMealMarking } from '@/lib/meal-marking'
+import { getMealCost, getMealTargetDate, validateMealMarking, getCurrentIST } from '@/lib/meal-marking'
 import {
   type MealCategory,
   type MealType,
@@ -69,7 +69,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const today = new Date().toISOString().split('T')[0]
+  const { isoDate: today } = getCurrentIST()
   const todayMarkings = markings?.filter((m) => m.marked_at.startsWith(today)) || []
 
   // Create balance object shaped like old StudentBalance
@@ -134,7 +134,8 @@ export async function POST(request: NextRequest) {
     // Determine target date and whether it's tomorrow
     const mealTarget = getMealTargetDate(mealType, mealTimings)
     const effectiveDate = targetDate ?? mealTarget.date
-    const isTomorrow = effectiveDate !== new Date().toISOString().split('T')[0]
+    const { isoDate: todayStr } = getCurrentIST()
+    const isTomorrow = effectiveDate !== todayStr
 
     // Check duplicates
     const { data: existingMarkings } = await supabase

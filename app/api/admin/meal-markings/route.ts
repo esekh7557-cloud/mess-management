@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase'
+import { getCurrentIST } from '@/lib/meal-marking'
 
 export async function PATCH(request: NextRequest) {
   try {
@@ -20,8 +21,9 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: 'Meal marking not found or update failed' }, { status: 404 })
     }
 
+    const { isoDate: today } = getCurrentIST()
+
     // Get today's markings to return
-    const today = new Date().toISOString().split('T')[0]
     const { data: todayMarkings } = await supabase
       .from('meal_markings')
       .select('*')

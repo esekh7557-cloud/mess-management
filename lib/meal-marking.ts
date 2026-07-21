@@ -54,6 +54,32 @@ function getDefaultWindow(mealType: MealType) {
 }
 
 /**
+ * Get current time and date in IST (Asia/Kolkata)
+ */
+export function getCurrentIST() {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(now);
+
+  const get = (type: string) => parts.find(p => p.type === type)?.value;
+  const isoDate = `${get('year')}-${get('month')}-${get('day')}`;
+  
+  let hours = parseInt(get('hour')!, 10);
+  if (hours === 24) hours = 0; // en-GB sometimes returns 24 for midnight
+  const minutes = parseInt(get('minute')!, 10);
+  
+  return { isoDate, hours, minutes };
+}
+
+/**
  * Check if a meal can be marked right now
  */
 export function canMarkMeal(
@@ -64,8 +90,8 @@ export function canMarkMeal(
   reason?: string
   nextAvailableTime?: string
 } {
-  const now = new Date()
-  const currentMinutes = now.getHours() * 60 + now.getMinutes()
+  const ist = getCurrentIST()
+  const currentMinutes = ist.hours * 60 + ist.minutes
 
   if (timings?.removeTimeFrame) {
     return { canMark: true }
@@ -182,18 +208,22 @@ export function getMealTargetDate(
   mealType: MealType,
   timings?: MealSelectionTimings
 ): { date: string; isTomorrow: boolean } {
-  const now = new Date()
-  const today = now.toISOString().split('T')[0]
+  const ist = getCurrentIST()
+  const today = ist.isoDate
 
   const configuredWindow = timings?.[mealType] ?? getDefaultWindow(mealType)
   const end = parseTime(configuredWindow.endTime)
   const endMinutes = end.hours * 60 + end.minutes
-  const currentMinutes = now.getHours() * 60 + now.getMinutes()
+  const currentMinutes = ist.hours * 60 + ist.minutes
 
   if (currentMinutes > endMinutes) {
-    const tomorrow = new Date(now)
-    tomorrow.setDate(tomorrow.getDate() + 1)
-    return { date: tomorrow.toISOString().split('T')[0], isTomorrow: true }
+    // Tomorrow in IST
+    const tomorrowDate = new Date(`${today}T12:00:00Z`)
+    tomorrowDate.setDate(tomorrowDate.getDate() + 1)
+    
+    // We only need the ISO date YYYY-MM-DD
+    const tomorrowStr = tomorrowDate.toISOString().split('T')[0]
+    return { date: tomorrowStr, isTomorrow: true }
   }
 
   return { date: today, isTomorrow: false }
