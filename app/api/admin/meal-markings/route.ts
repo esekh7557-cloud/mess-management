@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase'
-import { getCurrentIST } from '@/lib/meal-marking'
+import { getCurrentIST, getUTCBoundsForISTDate } from '@/lib/meal-marking'
 
 export async function PATCH(request: NextRequest) {
   try {
@@ -22,13 +22,14 @@ export async function PATCH(request: NextRequest) {
     }
 
     const { isoDate: today } = getCurrentIST()
+    const { start: utcStart, end: utcEnd } = getUTCBoundsForISTDate(today)
 
     // Get today's markings to return
     const { data: todayMarkings } = await supabase
       .from('meal_markings')
       .select('*')
-      .gte('marked_at', `${today}T00:00:00.000Z`)
-      .lte('marked_at', `${today}T23:59:59.999Z`)
+      .gte('marked_at', utcStart)
+      .lte('marked_at', utcEnd)
       .order('marked_at', { ascending: false })
 
     return NextResponse.json({

@@ -87,6 +87,25 @@ export function getISTDateString(timestamp: string): string {
 }
 
 /**
+ * Given a date string (YYYY-MM-DD), returns the exact start and end UTC ISO strings
+ * that correspond to 00:00:00 and 23:59:59 in IST (Asia/Kolkata).
+ */
+export function getUTCBoundsForISTDate(dateString: string): { start: string; end: string } {
+  // IST is UTC+5:30.
+  // 00:00:00 IST = previous day 18:30:00 UTC
+  // 23:59:59 IST = same day 18:29:59 UTC
+  
+  // Parse the date as IST midnight
+  const startIST = new Date(`${dateString}T00:00:00+05:30`);
+  const endIST = new Date(`${dateString}T23:59:59.999+05:30`);
+  
+  return {
+    start: startIST.toISOString(),
+    end: endIST.toISOString()
+  };
+}
+
+/**
  * Check if a meal can be marked right now
  */
 export function canMarkMeal(

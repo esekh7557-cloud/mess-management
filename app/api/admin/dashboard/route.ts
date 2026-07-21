@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getHostelDistribution, getMealSummary, getWeeklyConsumption } from '@/lib/server-metrics'
-import { getCurrentIST } from '@/lib/meal-marking'
+import { getCurrentIST, getUTCBoundsForISTDate } from '@/lib/meal-marking'
 import { createAdminClient } from '@/lib/supabase'
 
 export async function GET(request: NextRequest) {
@@ -8,6 +8,7 @@ export async function GET(request: NextRequest) {
     const dateParam = request.nextUrl.searchParams.get('date')
     const { isoDate } = getCurrentIST()
     const targetDate = dateParam || isoDate
+    const { start: utcStart, end: utcEnd } = getUTCBoundsForISTDate(targetDate)
     const supabase = createAdminClient()
 
     // 1. Fetch Students
@@ -20,8 +21,8 @@ export async function GET(request: NextRequest) {
     const { data: mealMarkings } = await supabase
       .from('meal_markings')
       .select('*, users(name)')
-      .gte('marked_at', `${targetDate}T00:00:00.000Z`)
-      .lte('marked_at', `${targetDate}T23:59:59.999Z`)
+      .gte('marked_at', utcStart)
+      .lte('marked_at', utcEnd)
       .order('marked_at', { ascending: false })
       
     // Transform mealMarkings to include student_name
