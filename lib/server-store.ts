@@ -254,7 +254,27 @@ async function fetchStoreFromSupabase(): Promise<AppState> {
   return state
 }
 
+async function writeStore(state: AppState) {
+  await mkdir(DATA_DIR, { recursive: true })
+  await writeFile(STORE_PATH, JSON.stringify(state, null, 2), 'utf8')
+}
+
 export async function readStore(): Promise<AppState> {
+  try {
+    const content = await readFile(STORE_PATH, 'utf8')
+    return JSON.parse(content) as AppState
+  } catch {
+    const state = seedState()
+    await writeStore(state)
+    return state
+  }
+}
+
+export async function updateStore<T>(updater: (state: AppState) => Promise<T> | T): Promise<T> {
+  let result!: T
+
+  writeQueue = writeQueue.then(async () => {
+    const state = await readStore()
     result = await updater(state)
     await writeStore(state)
   })
