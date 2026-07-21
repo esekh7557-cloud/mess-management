@@ -1,10 +1,4 @@
-// Setup environment variables before imports
-import * as dotenv from 'dotenv'
-import path from 'path'
-
-// Load .env.local
-dotenv.config({ path: path.resolve(process.cwd(), '.env.local') })
-
+// Run this script with: npx tsx --env-file=.env.local scripts/seed-supabase.ts
 import { createClient } from '@supabase/supabase-js'
 import {
   students as mockStudents,
