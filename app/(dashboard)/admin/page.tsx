@@ -122,7 +122,9 @@ export default function AdminDashboardPage() {
 
   const loadMealTimings = async () => {
     try {
-      const payload = await apiRequest<{ data: { removeTimeFrame: boolean } }>('/api/meal-timings')
+      const payload = await apiRequest<{ data: { removeTimeFrame: boolean } }>('/api/meal-timings', {
+        cache: 'no-store',
+      })
       if (payload.data?.removeTimeFrame !== undefined) {
         setRemoveTimeFrame(payload.data.removeTimeFrame)
       }

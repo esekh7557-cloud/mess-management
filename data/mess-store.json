@@ -520,7 +520,7 @@
       "startTime": "18:00",
       "endTime": "21:00"
     },
-    "removeTimeFrame": false
+    "removeTimeFrame": true
   },
   "weeklyMenu": [
     {

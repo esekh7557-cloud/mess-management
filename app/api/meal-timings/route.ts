@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { readStore, updateStore } from '@/lib/server-store'
 
+export const dynamic = 'force-dynamic'
+
 export async function GET() {
   const state = await readStore()
 
